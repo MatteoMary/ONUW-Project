@@ -33,10 +33,14 @@ supports real-time multiplayer gameplay using WebSockets.
 
 ONUW-Project/
 ├── server.js server entry point
+
 ├── game.js logic (roles, phases, rules)
+
 ├── package.json
 └── public/
+
 ├── index.html 
+
 ├── client.js  logic
 └── styles.css 
 
