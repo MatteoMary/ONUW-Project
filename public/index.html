@@ -11,42 +11,32 @@
     <h1>One Night Ultimate Werewolf</h1>
 
     <section class="card" id="lobby">
-      <h2>Lobby</h2>
+  <h2>Lobby</h2>
 
-      <div class="row">
-        <input id="nameInput" placeholder="Your name" />
-        <input id="roomInput" placeholder="Room code" />
-      </div>
+  <div class="row">
+    <input id="nameInput" placeholder="Your name" />
+    <input id="roomInput" placeholder="Room code" />
+  </div>
 
-      <div class="row">
-        <button id="createRoomBtn">Create Room</button>
-        <button id="joinRoomBtn">Join Room</button>
-      </div>
+  <div class="row">
+    <button id="createRoomBtn">Create Room</button>
+    <button id="joinRoomBtn">Join Room</button>
+  </div>
 
-      <div class="row">
-        <label>
-          <input type="checkbox" id="readyCheckbox" />
-          Ready
-        </label>
-      </div>
+  <div class="row">
+    <label>
+      <input type="checkbox" id="readyCheckbox" />
+      Ready
+    </label>
+  </div>
 
-      <h3>Players</h3>
-      <ul id="playerList"></ul>
-    </section>
+  <div class="row hidden" id="hostControls">
+    <button id="startGameBtn">Start Game</button>
+  </div>
 
-    <section class="card hidden" id="game">
-      <h2 id="phaseTitle">Game Phase</h2>
-
-      <div class="subcard">
-        <h3>Your Role</h3>
-        <div id="roleInfo">Waiting for game to start…</div>
-      </div>
-
-      <div class="subcard hidden" id="actionArea">
-        <h3>Action</h3>
-        <div id="actionContent"></div>
-      </div>
-    </section>
+  <h3>Players</h3>
+  <ul id="playerList"></ul>
+</section>
   </div>
 
   <script src="client.js"></script>

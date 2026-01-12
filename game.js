@@ -29,20 +29,23 @@ export function getRoom(code) {
 class Room {
   constructor(code) {
     this.roomCode = code;
-    this.players = []; // { id, name, ws }
+    this.players = []; // { id, name, ws, ready, isHost }
+    this.started = false;
   }
 
   handleJoin(ws, msg) {
-    const nameRaw = (msg.name || "").trim();
-    const name = nameRaw.slice(0, 16);
+    if (this.started) {
+      ws.send(JSON.stringify({ type: "error", message: "Game already started" }));
+      return;
+    }
 
+    const name = (msg.name || "").trim().slice(0, 16);
     if (!name) {
       ws.send(JSON.stringify({ type: "error", message: "Name is required" }));
       return;
     }
 
-    // prevent duplicate names (simple)
-    if (this.players.some((p) => p.name.toLowerCase() === name.toLowerCase())) {
+    if (this.players.some(p => p.name.toLowerCase() === name.toLowerCase())) {
       ws.send(JSON.stringify({ type: "error", message: "Name already taken" }));
       return;
     }
@@ -51,6 +54,8 @@ class Room {
       id: uid("p"),
       name,
       ws,
+      ready: false,
+      isHost: this.players.length === 0,
     };
 
     ws.playerId = player.id;
@@ -60,39 +65,77 @@ class Room {
       type: "joined_room",
       roomCode: this.roomCode,
       playerId: player.id,
-      isHost: this.players.length === 1,
+      isHost: player.isHost,
     }));
 
     this.broadcastLobby();
   }
 
   handleMessage(ws, msg) {
-    // Commit #4: only lobby broadcasting exists.
-    // Future commits will add ready/roles/actions.
-    if (msg.type === "ping") {
-      ws.send(JSON.stringify({ type: "pong" }));
+    const player = this.players.find(p => p.ws === ws);
+    if (!player) return;
+
+    if (msg.type === "set_ready") {
+      player.ready = !!msg.ready;
+      this.broadcastLobby();
       return;
     }
 
-    ws.send(JSON.stringify({ type: "error", message: "Unsupported message (commit #4)" }));
+    if (msg.type === "start_game") {
+      if (!player.isHost) {
+        ws.send(JSON.stringify({ type: "error", message: "Only host can start" }));
+        return;
+      }
+      if (this.players.length < 3) {
+        ws.send(JSON.stringify({ type: "error", message: "Need at least 3 players" }));
+        return;
+      }
+      if (!this.players.every(p => p.ready)) {
+        ws.send(JSON.stringify({ type: "error", message: "All players must be ready" }));
+        return;
+      }
+
+      this.started = true;
+      this.broadcast({ type: "game_started" });
+      return;
+    }
+
+    ws.send(JSON.stringify({ type: "error", message: "Unsupported action" }));
   }
 
   handleDisconnect(ws) {
-    const idx = this.players.findIndex((p) => p.ws === ws);
-    if (idx !== -1) {
-      this.players.splice(idx, 1);
-      this.broadcastLobby();
+    const idx = this.players.findIndex(p => p.ws === ws);
+    if (idx === -1) return;
+
+    const wasHost = this.players[idx].isHost;
+    this.players.splice(idx, 1);
+
+    // Reassign host if needed
+    if (wasHost && this.players.length > 0) {
+      this.players[0].isHost = true;
     }
+
+    this.broadcastLobby();
   }
 
   broadcastLobby() {
     const payload = {
       type: "lobby_state",
       roomCode: this.roomCode,
-      players: this.players.map((p) => ({ id: p.id, name: p.name })),
+      started: this.started,
+      players: this.players.map(p => ({
+        id: p.id,
+        name: p.name,
+        ready: p.ready,
+        isHost: p.isHost,
+      })),
     };
 
-    const msg = JSON.stringify(payload);
+    this.broadcast(payload);
+  }
+
+  broadcast(obj) {
+    const msg = JSON.stringify(obj);
     for (const p of this.players) {
       if (p.ws && p.ws.readyState === 1) {
         p.ws.send(msg);
