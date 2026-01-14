@@ -2,6 +2,18 @@ import crypto from "crypto";
 
 const rooms = new Map();
 
+export const Roles = {
+  WEREWOLF: "WEREWOLF",
+  MINION: "MINION",
+  SEER: "SEER",
+  ROBBER: "ROBBER",
+  TROUBLEMAKER: "TROUBLEMAKER",
+  DRUNK: "DRUNK",
+  INSOMNIAC: "INSOMNIAC",
+  MASON: "MASON",
+  VILLAGER: "VILLAGER",
+};
+
 function roomCode(len = 4) {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let out = "";
@@ -11,6 +23,15 @@ function roomCode(len = 4) {
 
 function uid(prefix) {
   return `${prefix}_${crypto.randomBytes(6).toString("hex")}`;
+}
+
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
 }
 
 export function createRoom() {
@@ -29,8 +50,14 @@ export function getRoom(code) {
 class Room {
   constructor(code) {
     this.roomCode = code;
-    this.players = []; // { id, name, ws, ready, isHost }
+
+    this.players = []; 
+
     this.started = false;
+    this.phase = "LOBBY";
+
+    this.selectedRoles = []; 
+    this.centerRoles = [];   
   }
 
   handleJoin(ws, msg) {
@@ -56,6 +83,9 @@ class Room {
       ws,
       ready: false,
       isHost: this.players.length === 0,
+
+      originalRole: null,
+      currentRole: null,
     };
 
     ws.playerId = player.id;
@@ -76,6 +106,7 @@ class Room {
     if (!player) return;
 
     if (msg.type === "set_ready") {
+      if (this.started) return;
       player.ready = !!msg.ready;
       this.broadcastLobby();
       return;
@@ -95,12 +126,11 @@ class Room {
         return;
       }
 
-      this.started = true;
-      this.broadcast({ type: "game_started" });
+      this.startGame();
       return;
     }
 
-    ws.send(JSON.stringify({ type: "error", message: "Unsupported action" }));
+    ws.send(JSON.stringify({ type: "error", message: "Unsupported action (commit #6)" }));
   }
 
   handleDisconnect(ws) {
@@ -110,19 +140,80 @@ class Room {
     const wasHost = this.players[idx].isHost;
     this.players.splice(idx, 1);
 
-    // Reassign host if needed
     if (wasHost && this.players.length > 0) {
       this.players[0].isHost = true;
     }
 
+    if (!this.started) this.broadcastLobby();
+  }
+
+  buildDefaultRoles(playerCount) {
+    const base = [
+      Roles.WEREWOLF, Roles.WEREWOLF,
+      Roles.MINION,
+      Roles.SEER,
+      Roles.ROBBER,
+      Roles.TROUBLEMAKER,
+      Roles.DRUNK,
+      Roles.INSOMNIAC,
+    ];
+    const need = playerCount + 3;
+    const roles = base.slice(0, need);
+    while (roles.length < need) roles.push(Roles.VILLAGER);
+    return roles;
+  }
+
+  startGame() {
+    this.started = true;
+    this.phase = "SETUP";
+
+    const deckSize = this.players.length + 3;
+
+    this.selectedRoles = this.buildDefaultRoles(this.players.length);
+    if (this.selectedRoles.length !== deckSize) {
+      throw new Error("Role deck size mismatch");
+    }
+
+    const deck = shuffle(this.selectedRoles);
+
+    for (let i = 0; i < this.players.length; i++) {
+      const r = deck[i];
+      this.players[i].originalRole = r;
+      this.players[i].currentRole = r;
+    }
+
+    this.centerRoles = deck.slice(this.players.length);
+
+    this.broadcast({
+      type: "game_started",
+      phase: this.phase,
+    });
+
+    this.sendAllPrivateStates();
     this.broadcastLobby();
   }
+
+  sendAllPrivateStates() {
+    for (const p of this.players) {
+      if (!p.ws || p.ws.readyState !== 1) continue;
+
+      p.ws.send(JSON.stringify({
+        type: "private_state",
+        phase: this.phase,
+        playerId: p.id,
+        originalRole: p.originalRole,
+        currentRole: p.currentRole,
+      }));
+    }
+  }
+
 
   broadcastLobby() {
     const payload = {
       type: "lobby_state",
       roomCode: this.roomCode,
       started: this.started,
+      phase: this.phase,
       players: this.players.map(p => ({
         id: p.id,
         name: p.name,

@@ -9,11 +9,23 @@ const readyCheckbox = document.getElementById("readyCheckbox");
 const playerList = document.getElementById("playerList");
 const hostControls = document.getElementById("hostControls");
 
+const lobbySection = document.getElementById("lobby");
+const gameSection = document.getElementById("game");
+
+const roleInfo = document.getElementById("roleInfo");
+const phaseLabel = document.getElementById("phaseLabel");
+
 let state = {
   roomCode: null,
   playerId: null,
   isHost: false,
   players: [],
+  started: false,
+  phase: "LOBBY",
+
+  // private
+  originalRole: null,
+  currentRole: null,
 };
 
 const wsProto = location.protocol === "https:" ? "wss" : "ws";
@@ -36,12 +48,25 @@ ws.addEventListener("message", (ev) => {
 
   if (msg.type === "lobby_state") {
     state.players = msg.players;
+    state.started = !!msg.started;
+    state.phase = msg.phase || state.phase;
+
     state.isHost = msg.players.some(p => p.id === state.playerId && p.isHost);
+
     render();
   }
 
   if (msg.type === "game_started") {
-    alert("Game starting!");
+    state.started = true;
+    state.phase = msg.phase || "SETUP";
+    render();
+  }
+
+  if (msg.type === "private_state") {
+    state.phase = msg.phase || state.phase;
+    state.originalRole = msg.originalRole;
+    state.currentRole = msg.currentRole;
+    render();
   }
 
   if (msg.type === "error") {
@@ -66,9 +91,7 @@ readyCheckbox.onchange = () => {
   send("set_ready", { ready: readyCheckbox.checked });
 };
 
-startGameBtn.onclick = () => {
-  send("start_game");
-};
+startGameBtn.onclick = () => send("start_game");
 
 function render() {
   playerList.innerHTML = "";
@@ -78,5 +101,19 @@ function render() {
     playerList.appendChild(li);
   }
 
-  hostControls.classList.toggle("hidden", !state.isHost);
+  hostControls.classList.toggle("hidden", !state.isHost || state.started);
+
+  gameSection.classList.toggle("hidden", !state.started);
+  lobbySection.classList.toggle("hidden", state.started);
+
+  if (phaseLabel) phaseLabel.textContent = `Phase: ${state.phase}`;
+
+  if (state.originalRole) {
+    roleInfo.innerHTML = `
+      <div><b>Original:</b> ${state.originalRole}</div>
+      <div><b>Current:</b> ${state.currentRole}</div>
+    `;
+  } else {
+    roleInfo.textContent = "Waiting for role…";
+  }
 }
