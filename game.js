@@ -14,6 +14,17 @@ export const Roles = {
   VILLAGER: "VILLAGER",
 };
 
+const NIGHT_ORDER = [
+  { phase: "NIGHT_WEREWOLF", role: Roles.WEREWOLF },
+  { phase: "NIGHT_MINION", role: Roles.MINION },
+  { phase: "NIGHT_MASON", role: Roles.MASON },
+  { phase: "NIGHT_SEER", role: Roles.SEER },
+  { phase: "NIGHT_ROBBER", role: Roles.ROBBER },
+  { phase: "NIGHT_TROUBLEMAKER", role: Roles.TROUBLEMAKER },
+  { phase: "NIGHT_DRUNK", role: Roles.DRUNK },
+  { phase: "NIGHT_INSOMNIAC", role: Roles.INSOMNIAC },
+];
+
 function roomCode(len = 4) {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let out = "";
@@ -52,12 +63,13 @@ class Room {
     this.roomCode = code;
 
     this.players = []; 
-
     this.started = false;
-    this.phase = "LOBBY";
 
-    this.selectedRoles = []; 
-    this.centerRoles = [];   
+    this.phase = "LOBBY";
+    this.nightIndex = -1; 
+
+    this.selectedRoles = [];
+    this.centerRoles = [];
   }
 
   handleJoin(ws, msg) {
@@ -130,7 +142,7 @@ class Room {
       return;
     }
 
-    ws.send(JSON.stringify({ type: "error", message: "Unsupported action (commit #6)" }));
+    ws.send(JSON.stringify({ type: "error", message: "Unsupported action (commit #7)" }));
   }
 
   handleDisconnect(ws) {
@@ -147,6 +159,7 @@ class Room {
     if (!this.started) this.broadcastLobby();
   }
 
+
   buildDefaultRoles(playerCount) {
     const base = [
       Roles.WEREWOLF, Roles.WEREWOLF,
@@ -157,6 +170,7 @@ class Room {
       Roles.DRUNK,
       Roles.INSOMNIAC,
     ];
+
     const need = playerCount + 3;
     const roles = base.slice(0, need);
     while (roles.length < need) roles.push(Roles.VILLAGER);
@@ -166,6 +180,7 @@ class Room {
   startGame() {
     this.started = true;
     this.phase = "SETUP";
+    this.nightIndex = -1;
 
     const deckSize = this.players.length + 3;
 
@@ -184,14 +199,68 @@ class Room {
 
     this.centerRoles = deck.slice(this.players.length);
 
-    this.broadcast({
-      type: "game_started",
-      phase: this.phase,
-    });
-
+    this.broadcast({ type: "game_started", phase: this.phase });
     this.sendAllPrivateStates();
     this.broadcastLobby();
+    this.advancePhase();
   }
+
+
+  roleInPlay(role) {
+    return this.selectedRoles.includes(role);
+  }
+
+  advancePhase() {
+    if (this.phase === "SETUP") {
+      this.nightIndex = -1;
+      this.advanceNight();
+      return;
+    }
+
+    if (this.phase.startsWith("NIGHT_")) {
+      this.advanceNight();
+      return;
+    }
+
+    if (this.phase === "DISCUSSION") {
+      this.setPhase("VOTING");
+      return;
+    }
+
+    if (this.phase === "VOTING") {
+      return;
+    }
+  }
+
+  advanceNight() {
+    while (true) {
+      this.nightIndex += 1;
+      const next = NIGHT_ORDER[this.nightIndex];
+
+      if (!next) {
+        this.setPhase("DISCUSSION");
+        return;
+      }
+
+      if (this.roleInPlay(next.role)) {
+        this.setPhase(next.phase);
+        return;
+      }
+    }
+  }
+
+  setPhase(phase) {
+    this.phase = phase;
+
+    this.broadcast({ type: "phase_changed", phase: this.phase });
+    this.broadcastLobby();
+
+
+    if (this.phase.startsWith("NIGHT_")) {
+      setTimeout(() => this.advancePhase(), 1200);
+    }
+  }
+
 
   sendAllPrivateStates() {
     for (const p of this.players) {

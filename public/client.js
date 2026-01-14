@@ -14,6 +14,7 @@ const gameSection = document.getElementById("game");
 
 const roleInfo = document.getElementById("roleInfo");
 const phaseLabel = document.getElementById("phaseLabel");
+const phaseHint = document.getElementById("phaseHint");
 
 let state = {
   roomCode: null,
@@ -22,8 +23,6 @@ let state = {
   players: [],
   started: false,
   phase: "LOBBY",
-
-  // private
   originalRole: null,
   currentRole: null,
 };
@@ -50,15 +49,18 @@ ws.addEventListener("message", (ev) => {
     state.players = msg.players;
     state.started = !!msg.started;
     state.phase = msg.phase || state.phase;
-
     state.isHost = msg.players.some(p => p.id === state.playerId && p.isHost);
-
     render();
   }
 
   if (msg.type === "game_started") {
     state.started = true;
     state.phase = msg.phase || "SETUP";
+    render();
+  }
+
+  if (msg.type === "phase_changed") {
+    state.phase = msg.phase;
     render();
   }
 
@@ -93,6 +95,14 @@ readyCheckbox.onchange = () => {
 
 startGameBtn.onclick = () => send("start_game");
 
+function phaseMessage(phase) {
+  if (phase === "SETUP") return "Dealing roles…";
+  if (phase.startsWith("NIGHT_")) return "Night phase running (auto for now)…";
+  if (phase === "DISCUSSION") return "Discuss with the group!";
+  if (phase === "VOTING") return "Time to vote.";
+  return "Waiting…";
+}
+
 function render() {
   playerList.innerHTML = "";
   for (const p of state.players) {
@@ -107,6 +117,7 @@ function render() {
   lobbySection.classList.toggle("hidden", state.started);
 
   if (phaseLabel) phaseLabel.textContent = `Phase: ${state.phase}`;
+  if (phaseHint) phaseHint.textContent = phaseMessage(state.phase);
 
   if (state.originalRole) {
     roleInfo.innerHTML = `

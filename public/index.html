@@ -11,32 +11,49 @@
     <h1>One Night Ultimate Werewolf</h1>
 
     <section class="card" id="lobby">
-  <h2>Lobby</h2>
+      <h2>Lobby</h2>
 
-  <div class="row">
-    <input id="nameInput" placeholder="Your name" />
-    <input id="roomInput" placeholder="Room code" />
-  </div>
+      <div class="row">
+        <input id="nameInput" placeholder="Your name" maxlength="16" />
+        <input id="roomInput" placeholder="Room code" maxlength="6" />
+      </div>
 
-  <div class="row">
-    <button id="createRoomBtn">Create Room</button>
-    <button id="joinRoomBtn">Join Room</button>
-  </div>
+      <div class="row">
+        <button id="createRoomBtn">Create Room</button>
+        <button id="joinRoomBtn">Join Room</button>
+      </div>
 
-  <div class="row">
-    <label>
-      <input type="checkbox" id="readyCheckbox" />
-      Ready
-    </label>
-  </div>
+      <div class="row">
+        <label>
+          <input type="checkbox" id="readyCheckbox" />
+          Ready
+        </label>
+      </div>
 
-  <div class="row hidden" id="hostControls">
-    <button id="startGameBtn">Start Game</button>
-  </div>
+      <div class="row hidden" id="hostControls">
+        <button id="startGameBtn">Start Game</button>
+      </div>
 
-  <h3>Players</h3>
-  <ul id="playerList"></ul>
-</section>
+      <h3>Players</h3>
+      <ul id="playerList"></ul>
+    </section>
+
+    <section class="card hidden" id="game">
+      <h2>Game</h2>
+
+      <div id="phaseLabel" class="pill">Phase: —</div>
+      <p id="phaseHint" class="muted">Waiting…</p>
+
+      <div class="subcard">
+        <h3>Your Role</h3>
+        <div id="roleInfo">Waiting for role…</div>
+      </div>
+
+      <div class="subcard hidden" id="actionArea">
+        <h3>Action</h3>
+        <div id="actionContent"></div>
+      </div>
+    </section>
   </div>
 
   <script src="client.js"></script>
