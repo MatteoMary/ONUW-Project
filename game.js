@@ -62,15 +62,18 @@ class Room {
   constructor(code) {
     this.roomCode = code;
 
-    this.players = []; 
+    this.players = [];
     this.started = false;
 
     this.phase = "LOBBY";
-    this.nightIndex = -1; 
+    this.nightIndex = -1;
 
     this.selectedRoles = [];
     this.centerRoles = [];
+
+    this.pending = null;
   }
+
 
   handleJoin(ws, msg) {
     if (this.started) {
@@ -83,7 +86,6 @@ class Room {
       ws.send(JSON.stringify({ type: "error", message: "Name is required" }));
       return;
     }
-
     if (this.players.some(p => p.name.toLowerCase() === name.toLowerCase())) {
       ws.send(JSON.stringify({ type: "error", message: "Name already taken" }));
       return;
@@ -95,7 +97,6 @@ class Room {
       ws,
       ready: false,
       isHost: this.players.length === 0,
-
       originalRole: null,
       currentRole: null,
     };
@@ -125,38 +126,38 @@ class Room {
     }
 
     if (msg.type === "start_game") {
-      if (!player.isHost) {
-        ws.send(JSON.stringify({ type: "error", message: "Only host can start" }));
-        return;
-      }
-      if (this.players.length < 3) {
-        ws.send(JSON.stringify({ type: "error", message: "Need at least 3 players" }));
-        return;
-      }
-      if (!this.players.every(p => p.ready)) {
-        ws.send(JSON.stringify({ type: "error", message: "All players must be ready" }));
-        return;
-      }
+      if (!player.isHost) return this.safeError(ws, "Only host can start");
+      if (this.players.length < 3) return this.safeError(ws, "Need at least 3 players");
+      if (!this.players.every(p => p.ready)) return this.safeError(ws, "All players must be ready");
 
       this.startGame();
       return;
     }
 
-    ws.send(JSON.stringify({ type: "error", message: "Unsupported action (commit #7)" }));
+    if (msg.type === "submit_action") {
+      this.handleSubmitAction(ws, msg);
+      return;
+    }
+
+    this.safeError(ws, "Unsupported action (commit #8)");
   }
 
   handleDisconnect(ws) {
     const idx = this.players.findIndex(p => p.ws === ws);
     if (idx === -1) return;
 
-    const wasHost = this.players[idx].isHost;
+    const leaving = this.players[idx];
+    const wasHost = leaving.isHost;
+
     this.players.splice(idx, 1);
 
-    if (wasHost && this.players.length > 0) {
-      this.players[0].isHost = true;
+    if (!this.started) {
+      if (wasHost && this.players.length > 0) this.players[0].isHost = true;
+      this.broadcastLobby();
+      return;
     }
 
-    if (!this.started) this.broadcastLobby();
+    this.broadcastLobby();
   }
 
 
@@ -170,7 +171,6 @@ class Room {
       Roles.DRUNK,
       Roles.INSOMNIAC,
     ];
-
     const need = playerCount + 3;
     const roles = base.slice(0, need);
     while (roles.length < need) roles.push(Roles.VILLAGER);
@@ -181,10 +181,11 @@ class Room {
     this.started = true;
     this.phase = "SETUP";
     this.nightIndex = -1;
+    this.pending = null;
 
     const deckSize = this.players.length + 3;
-
     this.selectedRoles = this.buildDefaultRoles(this.players.length);
+
     if (this.selectedRoles.length !== deckSize) {
       throw new Error("Role deck size mismatch");
     }
@@ -202,12 +203,19 @@ class Room {
     this.broadcast({ type: "game_started", phase: this.phase });
     this.sendAllPrivateStates();
     this.broadcastLobby();
-    this.advancePhase();
+
+    this.advancePhase(); 
   }
 
 
   roleInPlay(role) {
     return this.selectedRoles.includes(role);
+  }
+
+  requiredActorsForRole(role) {
+    return this.players
+      .filter(p => p.originalRole === role)
+      .map(p => p.id);
   }
 
   advancePhase() {
@@ -227,9 +235,6 @@ class Room {
       return;
     }
 
-    if (this.phase === "VOTING") {
-      return;
-    }
   }
 
   advanceNight() {
@@ -242,37 +247,117 @@ class Room {
         return;
       }
 
-      if (this.roleInPlay(next.role)) {
-        this.setPhase(next.phase);
-        return;
-      }
+      if (!this.roleInPlay(next.role)) continue;
+
+      this.setPhase(next.phase);
+
+      this.beginNightPhase(next.role);
+      return;
     }
   }
 
   setPhase(phase) {
     this.phase = phase;
-
     this.broadcast({ type: "phase_changed", phase: this.phase });
     this.broadcastLobby();
+  }
+
+  beginNightPhase(role) {
+    const actors = this.requiredActorsForRole(role);
+
+    if (actors.length === 0) {
+      this.advancePhase();
+      return;
+    }
+
+    const confirmOnlyRoles = new Set([Roles.WEREWOLF, Roles.MINION, Roles.MASON, Roles.INSOMNIAC]);
+    if (!confirmOnlyRoles.has(role)) {
+      this.advancePhase();
+      return;
+    }
+
+    const actionId = uid("a");
+    this.pending = {
+      actionId,
+      phase: this.phase,
+      role,
+      requiredActors: actors,
+      completedActors: new Set(),
+      schemaType: "confirm_only",
+    };
+
+    for (const pid of actors) {
+      const p = this.players.find(x => x.id === pid);
+      this.safeSend(p, {
+        type: "prompt_action",
+        actionId,
+        phase: this.phase,
+        prompt: {
+          title: role,
+          text: this.promptTextForRole(role, actors.length),
+          schema: { type: "confirm_only" },
+        },
+      });
+    }
+
+    for (const p of this.players) {
+      if (!actors.includes(p.id)) {
+        this.safeSend(p, { type: "phase_wait", phase: this.phase });
+      }
+    }
+  }
+
+  promptTextForRole(role, actorCount) {
+    if (role === Roles.WEREWOLF) {
+      if (actorCount >= 2) return "Werewolves: open your eyes and see each other. Tap Confirm when done.";
+      return "You are the only Werewolf. (Center peek comes later.) Tap Confirm.";
+    }
+    if (role === Roles.MINION) return "Minion: see the Werewolves. Tap Confirm when done.";
+    if (role === Roles.MASON) return "Mason: see the other Mason (if any). Tap Confirm.";
+    if (role === Roles.INSOMNIAC) return "Insomniac: you may check your final role later (implemented soon). Tap Confirm.";
+    return "Tap Confirm.";
+  }
 
 
-    if (this.phase.startsWith("NIGHT_")) {
-      setTimeout(() => this.advancePhase(), 1200);
+  handleSubmitAction(ws, msg) {
+    const actorId = ws.playerId;
+    if (!actorId) return this.safeError(ws, "Not joined");
+
+    if (!this.pending) return this.safeError(ws, "No action pending");
+    if (msg.actionId !== this.pending.actionId) return this.safeError(ws, "Stale action");
+
+    if (this.pending.phase !== this.phase) return this.safeError(ws, "Wrong phase");
+    if (!this.pending.requiredActors.includes(actorId)) return this.safeError(ws, "You are not required to act");
+    if (this.pending.completedActors.has(actorId)) return this.safeError(ws, "Already submitted");
+
+    const type = msg.type || msg.actionType || msg.action;
+    const actionType = msg.actionType || msg.subtype || msg.kind || msg.payloadType || msg.clientType || msg.typeOverride;
+    const actualType = msg.action || msg.actionType || msg.kind || msg.payload?.type || msg.confirmType;
+
+    const ok = (msg.action === "confirm_only") || (msg.actionType === "confirm_only") || (msg.payload?.type === "confirm_only");
+    if (!ok) return this.safeError(ws, "Invalid action for this phase");
+
+    this.pending.completedActors.add(actorId);
+
+    ws.send(JSON.stringify({ type: "action_ack", actionId: this.pending.actionId }));
+
+    const allDone = this.pending.requiredActors.every(pid => this.pending.completedActors.has(pid));
+    if (allDone) {
+      this.pending = null;
+      this.advancePhase();
     }
   }
 
 
   sendAllPrivateStates() {
     for (const p of this.players) {
-      if (!p.ws || p.ws.readyState !== 1) continue;
-
-      p.ws.send(JSON.stringify({
+      this.safeSend(p, {
         type: "private_state",
         phase: this.phase,
         playerId: p.id,
         originalRole: p.originalRole,
         currentRole: p.currentRole,
-      }));
+      });
     }
   }
 
@@ -290,16 +375,23 @@ class Room {
         isHost: p.isHost,
       })),
     };
-
     this.broadcast(payload);
   }
 
   broadcast(obj) {
     const msg = JSON.stringify(obj);
     for (const p of this.players) {
-      if (p.ws && p.ws.readyState === 1) {
-        p.ws.send(msg);
-      }
+      if (p.ws && p.ws.readyState === 1) p.ws.send(msg);
     }
+  }
+
+  safeSend(player, obj) {
+    if (player?.ws && player.ws.readyState === 1) {
+      player.ws.send(JSON.stringify(obj));
+    }
+  }
+
+  safeError(ws, message) {
+    ws.send(JSON.stringify({ type: "error", message }));
   }
 }

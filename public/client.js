@@ -16,6 +16,9 @@ const roleInfo = document.getElementById("roleInfo");
 const phaseLabel = document.getElementById("phaseLabel");
 const phaseHint = document.getElementById("phaseHint");
 
+const actionArea = document.getElementById("actionArea");
+const actionContent = document.getElementById("actionContent");
+
 let state = {
   roomCode: null,
   playerId: null,
@@ -23,8 +26,11 @@ let state = {
   players: [],
   started: false,
   phase: "LOBBY",
+
   originalRole: null,
   currentRole: null,
+
+  pendingActionId: null,
 };
 
 const wsProto = location.protocol === "https:" ? "wss" : "ws";
@@ -61,6 +67,12 @@ ws.addEventListener("message", (ev) => {
 
   if (msg.type === "phase_changed") {
     state.phase = msg.phase;
+    clearActionUI();
+    render();
+  }
+
+  if (msg.type === "phase_wait") {
+    clearActionUI();
     render();
   }
 
@@ -68,6 +80,17 @@ ws.addEventListener("message", (ev) => {
     state.phase = msg.phase || state.phase;
     state.originalRole = msg.originalRole;
     state.currentRole = msg.currentRole;
+    render();
+  }
+
+  if (msg.type === "prompt_action") {
+    state.pendingActionId = msg.actionId;
+    showActionPrompt(msg);
+    render();
+  }
+
+  if (msg.type === "action_ack") {
+    clearActionUI();
     render();
   }
 
@@ -89,17 +112,15 @@ joinRoomBtn.onclick = () => {
   send("join_room", { name, roomCode });
 };
 
-readyCheckbox.onchange = () => {
-  send("set_ready", { ready: readyCheckbox.checked });
-};
+readyCheckbox.onchange = () => send("set_ready", { ready: readyCheckbox.checked });
 
 startGameBtn.onclick = () => send("start_game");
 
 function phaseMessage(phase) {
   if (phase === "SETUP") return "Dealing roles…";
-  if (phase.startsWith("NIGHT_")) return "Night phase running (auto for now)…";
+  if (phase.startsWith("NIGHT_")) return "Night phase: check if you have an action.";
   if (phase === "DISCUSSION") return "Discuss with the group!";
-  if (phase === "VOTING") return "Time to vote.";
+  if (phase === "VOTING") return "Voting will be implemented soon.";
   return "Waiting…";
 }
 
@@ -127,4 +148,37 @@ function render() {
   } else {
     roleInfo.textContent = "Waiting for role…";
   }
+}
+
+function showActionPrompt(msg) {
+  const { actionId, prompt } = msg;
+  actionArea.classList.remove("hidden");
+
+  actionContent.innerHTML = `
+    <div><b>${prompt.title}</b></div>
+    <div style="margin: 8px 0;">${prompt.text}</div>
+  `;
+
+  if (prompt?.schema?.type === "confirm_only") {
+    const btn = document.createElement("button");
+    btn.textContent = "Confirm";
+    btn.onclick = () => {
+      send("submit_action", {
+        actionId,
+        actionType: "confirm_only",
+        payload: { type: "confirm_only" },
+      });
+    };
+    actionContent.appendChild(btn);
+  } else {
+    const p = document.createElement("div");
+    p.textContent = "Action type not implemented yet.";
+    actionContent.appendChild(p);
+  }
+}
+
+function clearActionUI() {
+  state.pendingActionId = null;
+  actionArea.classList.add("hidden");
+  actionContent.innerHTML = "";
 }
