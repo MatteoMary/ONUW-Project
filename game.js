@@ -62,7 +62,7 @@ class Room {
   constructor(code) {
     this.roomCode = code;
 
-    this.players = [];
+    this.players = []; 
     this.started = false;
 
     this.phase = "LOBBY";
@@ -70,25 +70,20 @@ class Room {
 
     this.selectedRoles = [];
     this.centerRoles = [];
-
     this.pending = null;
   }
 
 
   handleJoin(ws, msg) {
     if (this.started) {
-      ws.send(JSON.stringify({ type: "error", message: "Game already started" }));
-      return;
+      return this.safeError(ws, "Game already started");
     }
 
     const name = (msg.name || "").trim().slice(0, 16);
-    if (!name) {
-      ws.send(JSON.stringify({ type: "error", message: "Name is required" }));
-      return;
-    }
+    if (!name) return this.safeError(ws, "Name is required");
+
     if (this.players.some(p => p.name.toLowerCase() === name.toLowerCase())) {
-      ws.send(JSON.stringify({ type: "error", message: "Name already taken" }));
-      return;
+      return this.safeError(ws, "Name already taken");
     }
 
     const player = {
@@ -139,7 +134,7 @@ class Room {
       return;
     }
 
-    this.safeError(ws, "Unsupported action (commit #8)");
+    this.safeError(ws, "Unsupported action (commit #9)");
   }
 
   handleDisconnect(ws) {
@@ -198,13 +193,13 @@ class Room {
       this.players[i].currentRole = r;
     }
 
-    this.centerRoles = deck.slice(this.players.length);
+    this.centerRoles = deck.slice(this.players.length); // length 3
 
     this.broadcast({ type: "game_started", phase: this.phase });
     this.sendAllPrivateStates();
     this.broadcastLobby();
 
-    this.advancePhase(); 
+    this.advancePhase();
   }
 
 
@@ -213,9 +208,7 @@ class Room {
   }
 
   requiredActorsForRole(role) {
-    return this.players
-      .filter(p => p.originalRole === role)
-      .map(p => p.id);
+    return this.players.filter(p => p.originalRole === role).map(p => p.id);
   }
 
   advancePhase() {
@@ -250,7 +243,6 @@ class Room {
       if (!this.roleInPlay(next.role)) continue;
 
       this.setPhase(next.phase);
-
       this.beginNightPhase(next.role);
       return;
     }
@@ -271,7 +263,12 @@ class Room {
     }
 
     const confirmOnlyRoles = new Set([Roles.WEREWOLF, Roles.MINION, Roles.MASON, Roles.INSOMNIAC]);
-    if (!confirmOnlyRoles.has(role)) {
+
+    let schemaType = null;
+    if (confirmOnlyRoles.has(role)) schemaType = "confirm_only";
+    if (role === Roles.SEER) schemaType = "seer";
+
+    if (!schemaType) {
       this.advancePhase();
       return;
     }
@@ -283,20 +280,18 @@ class Room {
       role,
       requiredActors: actors,
       completedActors: new Set(),
-      schemaType: "confirm_only",
+      schemaType,
     };
 
     for (const pid of actors) {
       const p = this.players.find(x => x.id === pid);
+
+      const prompt = this.buildPromptForRole(role, pid, actors.length);
       this.safeSend(p, {
         type: "prompt_action",
         actionId,
         phase: this.phase,
-        prompt: {
-          title: role,
-          text: this.promptTextForRole(role, actors.length),
-          schema: { type: "confirm_only" },
-        },
+        prompt,
       });
     }
 
@@ -307,14 +302,39 @@ class Room {
     }
   }
 
-  promptTextForRole(role, actorCount) {
+  buildPromptForRole(role, actorId, actorCount) {
+    if (role === Roles.SEER) {
+      const seer = this.players.find(p => p.id === actorId);
+      const otherPlayers = this.players
+        .filter(p => p.id !== actorId)
+        .map(p => ({ id: p.id, name: p.name }));
+
+      return {
+        title: "SEER",
+        text: "Choose ONE: view 1 player's card, OR view 2 center cards.",
+        schema: {
+          type: "seer",
+          players: otherPlayers,
+          centerCount: 3,
+        },
+      };
+    }
+
+    return {
+      title: role,
+      text: this.promptTextForConfirmRole(role, actorCount),
+      schema: { type: "confirm_only" },
+    };
+  }
+
+  promptTextForConfirmRole(role, actorCount) {
     if (role === Roles.WEREWOLF) {
       if (actorCount >= 2) return "Werewolves: open your eyes and see each other. Tap Confirm when done.";
-      return "You are the only Werewolf. (Center peek comes later.) Tap Confirm.";
+      return "You are the only Werewolf. (Center peek later.) Tap Confirm.";
     }
     if (role === Roles.MINION) return "Minion: see the Werewolves. Tap Confirm when done.";
     if (role === Roles.MASON) return "Mason: see the other Mason (if any). Tap Confirm.";
-    if (role === Roles.INSOMNIAC) return "Insomniac: you may check your final role later (implemented soon). Tap Confirm.";
+    if (role === Roles.INSOMNIAC) return "Insomniac: you will check your final role later. Tap Confirm.";
     return "Tap Confirm.";
   }
 
@@ -322,25 +342,67 @@ class Room {
   handleSubmitAction(ws, msg) {
     const actorId = ws.playerId;
     if (!actorId) return this.safeError(ws, "Not joined");
-
     if (!this.pending) return this.safeError(ws, "No action pending");
     if (msg.actionId !== this.pending.actionId) return this.safeError(ws, "Stale action");
-
     if (this.pending.phase !== this.phase) return this.safeError(ws, "Wrong phase");
     if (!this.pending.requiredActors.includes(actorId)) return this.safeError(ws, "You are not required to act");
     if (this.pending.completedActors.has(actorId)) return this.safeError(ws, "Already submitted");
 
-    const type = msg.type || msg.actionType || msg.action;
-    const actionType = msg.actionType || msg.subtype || msg.kind || msg.payloadType || msg.clientType || msg.typeOverride;
-    const actualType = msg.action || msg.actionType || msg.kind || msg.payload?.type || msg.confirmType;
+    if (this.pending.schemaType === "confirm_only") {
+      const ok = (msg.actionType === "confirm_only") || (msg.payload?.type === "confirm_only");
+      if (!ok) return this.safeError(ws, "Invalid action");
+      this.pending.completedActors.add(actorId);
+      ws.send(JSON.stringify({ type: "action_ack", actionId: this.pending.actionId }));
+      this.maybeFinishPending();
+      return;
+    }
 
-    const ok = (msg.action === "confirm_only") || (msg.actionType === "confirm_only") || (msg.payload?.type === "confirm_only");
-    if (!ok) return this.safeError(ws, "Invalid action for this phase");
+    if (this.pending.schemaType === "seer") {
+      const ok = (msg.actionType === "seer") || (msg.payload?.type === "seer");
+      if (!ok) return this.safeError(ws, "Invalid action");
 
-    this.pending.completedActors.add(actorId);
+      const payload = msg.payload || {};
+      const mode = payload.mode;
 
-    ws.send(JSON.stringify({ type: "action_ack", actionId: this.pending.actionId }));
+      if (mode === "player") {
+        const targetId = payload.targetPlayerId;
+        if (!targetId) return this.safeError(ws, "Missing target player");
+        if (targetId === actorId) return this.safeError(ws, "Cannot view your own card");
+        const target = this.players.find(p => p.id === targetId);
+        if (!target) return this.safeError(ws, "Invalid target");
+        ws.send(JSON.stringify({
+          type: "action_result",
+          title: "Seer Result",
+          text: `You saw that ${target.name} is ${target.currentRole}.`,
+        }));
+      } else if (mode === "center") {
+        const indices = payload.indices;
+        if (!Array.isArray(indices) || indices.length !== 2) return this.safeError(ws, "Pick 2 center cards");
+        const [a, b] = indices;
+        if (![a, b].every(n => Number.isInteger(n) && n >= 0 && n <= 2)) {
+          return this.safeError(ws, "Center indices must be 0,1,2");
+        }
+        if (a === b) return this.safeError(ws, "Must pick two different cards");
 
+        ws.send(JSON.stringify({
+          type: "action_result",
+          title: "Seer Result",
+          text: `Center card ${a + 1} is ${this.centerRoles[a]}. Center card ${b + 1} is ${this.centerRoles[b]}.`,
+        }));
+      } else {
+        return this.safeError(ws, "Invalid mode");
+      }
+
+      this.pending.completedActors.add(actorId);
+      ws.send(JSON.stringify({ type: "action_ack", actionId: this.pending.actionId }));
+      this.maybeFinishPending();
+      return;
+    }
+
+    this.safeError(ws, "Unknown pending schema");
+  }
+
+  maybeFinishPending() {
     const allDone = this.pending.requiredActors.every(pid => this.pending.completedActors.has(pid));
     if (allDone) {
       this.pending = null;
