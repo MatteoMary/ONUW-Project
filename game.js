@@ -62,7 +62,7 @@ class Room {
   constructor(code) {
     this.roomCode = code;
 
-    this.players = []; 
+    this.players = [];
     this.started = false;
 
     this.phase = "LOBBY";
@@ -70,14 +70,13 @@ class Room {
 
     this.selectedRoles = [];
     this.centerRoles = [];
-    this.pending = null;
+
+    this.pending = null; 
   }
 
 
   handleJoin(ws, msg) {
-    if (this.started) {
-      return this.safeError(ws, "Game already started");
-    }
+    if (this.started) return this.safeError(ws, "Game already started");
 
     const name = (msg.name || "").trim().slice(0, 16);
     if (!name) return this.safeError(ws, "Name is required");
@@ -124,7 +123,6 @@ class Room {
       if (!player.isHost) return this.safeError(ws, "Only host can start");
       if (this.players.length < 3) return this.safeError(ws, "Need at least 3 players");
       if (!this.players.every(p => p.ready)) return this.safeError(ws, "All players must be ready");
-
       this.startGame();
       return;
     }
@@ -134,7 +132,7 @@ class Room {
       return;
     }
 
-    this.safeError(ws, "Unsupported action (commit #9)");
+    this.safeError(ws, "Unsupported action (commit #10)");
   }
 
   handleDisconnect(ws) {
@@ -180,10 +178,7 @@ class Room {
 
     const deckSize = this.players.length + 3;
     this.selectedRoles = this.buildDefaultRoles(this.players.length);
-
-    if (this.selectedRoles.length !== deckSize) {
-      throw new Error("Role deck size mismatch");
-    }
+    if (this.selectedRoles.length !== deckSize) throw new Error("Role deck size mismatch");
 
     const deck = shuffle(this.selectedRoles);
 
@@ -193,7 +188,7 @@ class Room {
       this.players[i].currentRole = r;
     }
 
-    this.centerRoles = deck.slice(this.players.length); // length 3
+    this.centerRoles = deck.slice(this.players.length);
 
     this.broadcast({ type: "game_started", phase: this.phase });
     this.sendAllPrivateStates();
@@ -227,7 +222,6 @@ class Room {
       this.setPhase("VOTING");
       return;
     }
-
   }
 
   advanceNight() {
@@ -267,6 +261,7 @@ class Room {
     let schemaType = null;
     if (confirmOnlyRoles.has(role)) schemaType = "confirm_only";
     if (role === Roles.SEER) schemaType = "seer";
+    if (role === Roles.ROBBER) schemaType = "robber";
 
     if (!schemaType) {
       this.advancePhase();
@@ -284,39 +279,32 @@ class Room {
     };
 
     for (const pid of actors) {
-      const p = this.players.find(x => x.id === pid);
-
       const prompt = this.buildPromptForRole(role, pid, actors.length);
-      this.safeSend(p, {
-        type: "prompt_action",
-        actionId,
-        phase: this.phase,
-        prompt,
-      });
+      const p = this.players.find(x => x.id === pid);
+      this.safeSend(p, { type: "prompt_action", actionId, phase: this.phase, prompt });
     }
 
     for (const p of this.players) {
-      if (!actors.includes(p.id)) {
-        this.safeSend(p, { type: "phase_wait", phase: this.phase });
-      }
+      if (!actors.includes(p.id)) this.safeSend(p, { type: "phase_wait", phase: this.phase });
     }
   }
 
   buildPromptForRole(role, actorId, actorCount) {
     if (role === Roles.SEER) {
-      const seer = this.players.find(p => p.id === actorId);
-      const otherPlayers = this.players
-        .filter(p => p.id !== actorId)
-        .map(p => ({ id: p.id, name: p.name }));
-
+      const others = this.players.filter(p => p.id !== actorId).map(p => ({ id: p.id, name: p.name }));
       return {
         title: "SEER",
         text: "Choose ONE: view 1 player's card, OR view 2 center cards.",
-        schema: {
-          type: "seer",
-          players: otherPlayers,
-          centerCount: 3,
-        },
+        schema: { type: "seer", players: others, centerCount: 3 },
+      };
+    }
+
+    if (role === Roles.ROBBER) {
+      const others = this.players.filter(p => p.id !== actorId).map(p => ({ id: p.id, name: p.name }));
+      return {
+        title: "ROBBER",
+        text: "Choose 1 player to rob. You will swap roles and learn your new role.",
+        schema: { type: "robber", players: others },
       };
     }
 
@@ -370,6 +358,7 @@ class Room {
         if (targetId === actorId) return this.safeError(ws, "Cannot view your own card");
         const target = this.players.find(p => p.id === targetId);
         if (!target) return this.safeError(ws, "Invalid target");
+
         ws.send(JSON.stringify({
           type: "action_result",
           title: "Seer Result",
@@ -379,9 +368,7 @@ class Room {
         const indices = payload.indices;
         if (!Array.isArray(indices) || indices.length !== 2) return this.safeError(ws, "Pick 2 center cards");
         const [a, b] = indices;
-        if (![a, b].every(n => Number.isInteger(n) && n >= 0 && n <= 2)) {
-          return this.safeError(ws, "Center indices must be 0,1,2");
-        }
+        if (![a, b].every(n => Number.isInteger(n) && n >= 0 && n <= 2)) return this.safeError(ws, "Center indices must be 0,1,2");
         if (a === b) return this.safeError(ws, "Must pick two different cards");
 
         ws.send(JSON.stringify({
@@ -392,6 +379,43 @@ class Room {
       } else {
         return this.safeError(ws, "Invalid mode");
       }
+
+      this.pending.completedActors.add(actorId);
+      ws.send(JSON.stringify({ type: "action_ack", actionId: this.pending.actionId }));
+      this.maybeFinishPending();
+      return;
+    }
+
+    if (this.pending.schemaType === "robber") {
+      const ok = (msg.actionType === "robber") || (msg.payload?.type === "robber");
+      if (!ok) return this.safeError(ws, "Invalid action");
+
+      const payload = msg.payload || {};
+      const targetId = payload.targetPlayerId;
+      if (!targetId) return this.safeError(ws, "Missing target player");
+      if (targetId === actorId) return this.safeError(ws, "Cannot rob yourself");
+
+      const robber = this.players.find(p => p.id === actorId);
+      const target = this.players.find(p => p.id === targetId);
+      if (!robber || !target) return this.safeError(ws, "Invalid target");
+
+      const tmp = robber.currentRole;
+      robber.currentRole = target.currentRole;
+      target.currentRole = tmp;
+
+      ws.send(JSON.stringify({
+        type: "action_result",
+        title: "Robber Result",
+        text: `You robbed ${target.name}. Your new role is ${robber.currentRole}.`,
+      }));
+
+      this.safeSend(robber, {
+        type: "private_state",
+        phase: this.phase,
+        playerId: robber.id,
+        originalRole: robber.originalRole,
+        currentRole: robber.currentRole,
+      });
 
       this.pending.completedActors.add(actorId);
       ws.send(JSON.stringify({ type: "action_ack", actionId: this.pending.actionId }));

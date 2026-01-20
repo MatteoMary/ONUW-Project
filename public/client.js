@@ -205,6 +205,47 @@ function showActionPrompt(msg) {
     return;
   }
 
+  if (prompt?.schema?.type === "robber") {
+    const schema = prompt.schema;
+
+    actionContent.innerHTML += `<div style="margin-top:10px;"><b>Choose a player to rob:</b></div>`;
+
+    const select = document.createElement("select");
+    select.style.padding = "10px";
+    select.style.borderRadius = "10px";
+    select.style.marginTop = "6px";
+
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "-- Select --";
+    select.appendChild(placeholder);
+
+    for (const p of schema.players) {
+      const opt = document.createElement("option");
+      opt.value = p.id;
+      opt.textContent = p.name;
+      select.appendChild(opt);
+    }
+
+    const submit = document.createElement("button");
+    submit.textContent = "Rob";
+    submit.style.marginLeft = "10px";
+    submit.onclick = () => {
+      const targetPlayerId = select.value;
+      if (!targetPlayerId) return alert("Pick a player");
+      send("submit_action", {
+        actionId,
+        actionType: "robber",
+        payload: { type: "robber", targetPlayerId },
+      });
+    };
+
+    actionContent.appendChild(select);
+    actionContent.appendChild(submit);
+    return;
+  }
+
+
   const p = document.createElement("div");
   p.textContent = "Action type not implemented yet.";
   actionContent.appendChild(p);
