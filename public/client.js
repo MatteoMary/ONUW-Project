@@ -89,8 +89,18 @@ ws.addEventListener("message", (ev) => {
     render();
   }
 
+  if (msg.type === "action_result") {
+    actionArea.classList.remove("hidden");
+    actionContent.innerHTML = `
+      <div><b>${msg.title || "Result"}</b></div>
+      <div style="margin-top:8px;">${msg.text || ""}</div>
+    `;
+  }
+
   if (msg.type === "action_ack") {
-    clearActionUI();
+    setTimeout(() => {
+      if (!actionContent.innerHTML.trim()) clearActionUI();
+    }, 50);
     render();
   }
 
@@ -118,7 +128,7 @@ startGameBtn.onclick = () => send("start_game");
 
 function phaseMessage(phase) {
   if (phase === "SETUP") return "Dealing roles…";
-  if (phase.startsWith("NIGHT_")) return "Night phase: check if you have an action.";
+  if (phase.startsWith("NIGHT_")) return "Night phase: act if prompted.";
   if (phase === "DISCUSSION") return "Discuss with the group!";
   if (phase === "VOTING") return "Voting will be implemented soon.";
   return "Waiting…";
@@ -152,8 +162,8 @@ function render() {
 
 function showActionPrompt(msg) {
   const { actionId, prompt } = msg;
-  actionArea.classList.remove("hidden");
 
+  actionArea.classList.remove("hidden");
   actionContent.innerHTML = `
     <div><b>${prompt.title}</b></div>
     <div style="margin: 8px 0;">${prompt.text}</div>
@@ -170,11 +180,154 @@ function showActionPrompt(msg) {
       });
     };
     actionContent.appendChild(btn);
-  } else {
-    const p = document.createElement("div");
-    p.textContent = "Action type not implemented yet.";
-    actionContent.appendChild(p);
+    return;
   }
+
+  if (prompt?.schema?.type === "seer") {
+    const schema = prompt.schema;
+
+    const viewPlayerBtn = document.createElement("button");
+    viewPlayerBtn.textContent = "View 1 Player";
+    viewPlayerBtn.onclick = () => renderSeerPlayerMode(actionId, schema.players);
+
+    const viewCenterBtn = document.createElement("button");
+    viewCenterBtn.textContent = "View 2 Center Cards";
+    viewCenterBtn.onclick = () => renderSeerCenterMode(actionId);
+
+    const row = document.createElement("div");
+    row.style.display = "flex";
+    row.style.gap = "10px";
+    row.style.flexWrap = "wrap";
+    row.appendChild(viewPlayerBtn);
+    row.appendChild(viewCenterBtn);
+
+    actionContent.appendChild(row);
+    return;
+  }
+
+  if (prompt?.schema?.type === "robber") {
+    const schema = prompt.schema;
+
+    actionContent.innerHTML += `<div style="margin-top:10px;"><b>Choose a player to rob:</b></div>`;
+
+    const select = document.createElement("select");
+    select.style.padding = "10px";
+    select.style.borderRadius = "10px";
+    select.style.marginTop = "6px";
+
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "-- Select --";
+    select.appendChild(placeholder);
+
+    for (const p of schema.players) {
+      const opt = document.createElement("option");
+      opt.value = p.id;
+      opt.textContent = p.name;
+      select.appendChild(opt);
+    }
+
+    const submit = document.createElement("button");
+    submit.textContent = "Rob";
+    submit.style.marginLeft = "10px";
+    submit.onclick = () => {
+      const targetPlayerId = select.value;
+      if (!targetPlayerId) return alert("Pick a player");
+      send("submit_action", {
+        actionId,
+        actionType: "robber",
+        payload: { type: "robber", targetPlayerId },
+      });
+    };
+
+    actionContent.appendChild(select);
+    actionContent.appendChild(submit);
+    return;
+  }
+
+
+  const p = document.createElement("div");
+  p.textContent = "Action type not implemented yet.";
+  actionContent.appendChild(p);
+}
+
+function renderSeerPlayerMode(actionId, players) {
+  actionContent.innerHTML += `<div style="margin-top:10px;"><b>Choose a player:</b></div>`;
+
+  const select = document.createElement("select");
+  select.style.padding = "10px";
+  select.style.borderRadius = "10px";
+  select.style.marginTop = "6px";
+
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "-- Select --";
+  select.appendChild(placeholder);
+
+  for (const p of players) {
+    const opt = document.createElement("option");
+    opt.value = p.id;
+    opt.textContent = p.name;
+    select.appendChild(opt);
+  }
+
+  const submit = document.createElement("button");
+  submit.textContent = "Reveal";
+  submit.style.marginLeft = "10px";
+  submit.onclick = () => {
+    const targetPlayerId = select.value;
+    if (!targetPlayerId) return alert("Pick a player");
+    send("submit_action", {
+      actionId,
+      actionType: "seer",
+      payload: { type: "seer", mode: "player", targetPlayerId },
+    });
+  };
+
+  actionContent.appendChild(select);
+  actionContent.appendChild(submit);
+}
+
+function renderSeerCenterMode(actionId) {
+  actionContent.innerHTML += `<div style="margin-top:10px;"><b>Pick 2 center cards:</b></div>`;
+
+  const wrap = document.createElement("div");
+  wrap.style.display = "flex";
+  wrap.style.gap = "10px";
+  wrap.style.flexWrap = "wrap";
+  wrap.style.marginTop = "6px";
+
+  const checks = [0, 1, 2].map((i) => {
+    const label = document.createElement("label");
+    label.style.display = "flex";
+    label.style.alignItems = "center";
+    label.style.gap = "6px";
+
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.value = String(i);
+
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode(`Center ${i + 1}`));
+    wrap.appendChild(label);
+
+    return cb;
+  });
+
+  const submit = document.createElement("button");
+  submit.textContent = "Reveal";
+  submit.onclick = () => {
+    const picked = checks.filter(c => c.checked).map(c => Number(c.value));
+    if (picked.length !== 2) return alert("Pick exactly 2 center cards");
+    send("submit_action", {
+      actionId,
+      actionType: "seer",
+      payload: { type: "seer", mode: "center", indices: picked },
+    });
+  };
+
+  actionContent.appendChild(wrap);
+  actionContent.appendChild(submit);
 }
 
 function clearActionUI() {
