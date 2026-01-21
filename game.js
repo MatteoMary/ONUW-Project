@@ -48,7 +48,6 @@ function shuffle(arr) {
 export function createRoom() {
   let code = roomCode();
   while (rooms.has(code)) code = roomCode();
-
   const room = new Room(code);
   rooms.set(code, room);
   return room;
@@ -132,7 +131,7 @@ class Room {
       return;
     }
 
-    this.safeError(ws, "Unsupported action (commit #10)");
+    this.safeError(ws, "Unsupported action (commit #11)");
   }
 
   handleDisconnect(ws) {
@@ -250,7 +249,6 @@ class Room {
 
   beginNightPhase(role) {
     const actors = this.requiredActorsForRole(role);
-
     if (actors.length === 0) {
       this.advancePhase();
       return;
@@ -262,6 +260,7 @@ class Room {
     if (confirmOnlyRoles.has(role)) schemaType = "confirm_only";
     if (role === Roles.SEER) schemaType = "seer";
     if (role === Roles.ROBBER) schemaType = "robber";
+    if (role === Roles.TROUBLEMAKER) schemaType = "troublemaker";
 
     if (!schemaType) {
       this.advancePhase();
@@ -305,6 +304,15 @@ class Room {
         title: "ROBBER",
         text: "Choose 1 player to rob. You will swap roles and learn your new role.",
         schema: { type: "robber", players: others },
+      };
+    }
+
+    if (role === Roles.TROUBLEMAKER) {
+      const others = this.players.filter(p => p.id !== actorId).map(p => ({ id: p.id, name: p.name }));
+      return {
+        title: "TROUBLEMAKER",
+        text: "Choose 2 other players to swap. You do NOT see their roles.",
+        schema: { type: "troublemaker", players: others },
       };
     }
 
@@ -390,8 +398,7 @@ class Room {
       const ok = (msg.actionType === "robber") || (msg.payload?.type === "robber");
       if (!ok) return this.safeError(ws, "Invalid action");
 
-      const payload = msg.payload || {};
-      const targetId = payload.targetPlayerId;
+      const targetId = msg.payload?.targetPlayerId;
       if (!targetId) return this.safeError(ws, "Missing target player");
       if (targetId === actorId) return this.safeError(ws, "Cannot rob yourself");
 
@@ -415,6 +422,51 @@ class Room {
         playerId: robber.id,
         originalRole: robber.originalRole,
         currentRole: robber.currentRole,
+      });
+
+      this.pending.completedActors.add(actorId);
+      ws.send(JSON.stringify({ type: "action_ack", actionId: this.pending.actionId }));
+      this.maybeFinishPending();
+      return;
+    }
+
+    if (this.pending.schemaType === "troublemaker") {
+      const ok = (msg.actionType === "troublemaker") || (msg.payload?.type === "troublemaker");
+      if (!ok) return this.safeError(ws, "Invalid action");
+
+      const a = msg.payload?.playerA;
+      const b = msg.payload?.playerB;
+      if (!a || !b) return this.safeError(ws, "Pick two players");
+      if (a === b) return this.safeError(ws, "Players must be different");
+      if (a === actorId || b === actorId) return this.safeError(ws, "Cannot include yourself");
+
+      const pA = this.players.find(p => p.id === a);
+      const pB = this.players.find(p => p.id === b);
+      if (!pA || !pB) return this.safeError(ws, "Invalid players");
+
+      const tmp = pA.currentRole;
+      pA.currentRole = pB.currentRole;
+      pB.currentRole = tmp;
+
+      ws.send(JSON.stringify({
+        type: "action_result",
+        title: "Troublemaker",
+        text: "Swap complete.",
+      }));
+
+      this.safeSend(pA, {
+        type: "private_state",
+        phase: this.phase,
+        playerId: pA.id,
+        originalRole: pA.originalRole,
+        currentRole: pA.currentRole,
+      });
+      this.safeSend(pB, {
+        type: "private_state",
+        phase: this.phase,
+        playerId: pB.id,
+        originalRole: pB.originalRole,
+        currentRole: pB.currentRole,
       });
 
       this.pending.completedActors.add(actorId);

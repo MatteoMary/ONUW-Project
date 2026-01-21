@@ -245,6 +245,52 @@ function showActionPrompt(msg) {
     return;
   }
 
+  // TROUBLEMAKER
+  if (prompt?.schema?.type === "troublemaker") {
+    const schema = prompt.schema;
+
+    actionContent.innerHTML += `<div style="margin-top:10px;"><b>Pick 2 players to swap:</b></div>`;
+
+    const selectA = document.createElement("select");
+    const selectB = document.createElement("select");
+    for (const sel of [selectA, selectB]) {
+      sel.style.padding = "10px";
+      sel.style.borderRadius = "10px";
+      sel.style.marginTop = "6px";
+      const ph = document.createElement("option");
+      ph.value = "";
+      ph.textContent = "-- Select --";
+      sel.appendChild(ph);
+      for (const p of schema.players) {
+        const opt = document.createElement("option");
+        opt.value = p.id;
+        opt.textContent = p.name;
+        sel.appendChild(opt);
+      }
+    }
+
+    const submit = document.createElement("button");
+    submit.textContent = "Swap";
+    submit.style.marginLeft = "10px";
+    submit.onclick = () => {
+      const playerA = selectA.value;
+      const playerB = selectB.value;
+      if (!playerA || !playerB) return alert("Pick two players");
+      if (playerA === playerB) return alert("Pick two different players");
+
+      send("submit_action", {
+        actionId,
+        actionType: "troublemaker",
+        payload: { type: "troublemaker", playerA, playerB },
+      });
+    };
+
+    actionContent.appendChild(selectA);
+    actionContent.appendChild(selectB);
+    actionContent.appendChild(submit);
+    return;
+  }
+
 
   const p = document.createElement("div");
   p.textContent = "Action type not implemented yet.";
@@ -328,7 +374,7 @@ function renderSeerCenterMode(actionId) {
 
   actionContent.appendChild(wrap);
   actionContent.appendChild(submit);
-}
+}b
 
 function clearActionUI() {
   state.pendingActionId = null;
