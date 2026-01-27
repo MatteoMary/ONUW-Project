@@ -245,7 +245,6 @@ function showActionPrompt(msg) {
     return;
   }
 
-  // TROUBLEMAKER
   if (prompt?.schema?.type === "troublemaker") {
     const schema = prompt.schema;
 
@@ -375,6 +374,108 @@ function renderSeerCenterMode(actionId) {
   actionContent.appendChild(wrap);
   actionContent.appendChild(submit);
 }b
+
+  if (prompt?.schema?.type === "werewolf_solo") {
+    actionContent.innerHTML += `<div style="margin-top:10px;"><b>Pick 1 center card to look at:</b></div>`;
+
+    const wrap = document.createElement("div");
+    wrap.style.display = "flex";
+    wrap.style.gap = "10px";
+    wrap.style.flexWrap = "wrap";
+    wrap.style.marginTop = "6px";
+
+    const radios = [0, 1, 2].map((i) => {
+      const label = document.createElement("label");
+      label.style.display = "flex";
+      label.style.alignItems = "center";
+      label.style.gap = "6px";
+
+      const rb = document.createElement("input");
+      rb.type = "radio";
+      rb.name = "wwsolo";
+      rb.value = String(i);
+
+      label.appendChild(rb);
+      label.appendChild(document.createTextNode(`Center ${i + 1}`));
+      wrap.appendChild(label);
+      return rb;
+    });
+
+    const submit = document.createElement("button");
+    submit.textContent = "Reveal";
+    submit.onclick = () => {
+      const picked = radios.find(r => r.checked);
+      if (!picked) return alert("Pick 1 center card");
+      send("submit_action", {
+        actionId,
+        actionType: "werewolf_solo",
+        payload: { type: "werewolf_solo", centerIndex: Number(picked.value) },
+      });
+    };
+
+    actionContent.appendChild(wrap);
+    actionContent.appendChild(submit);
+    return;
+  }
+
+  if (prompt?.schema?.type === "drunk") {
+    actionContent.innerHTML += `<div style="margin-top:10px;"><b>Pick 1 center card to swap with:</b></div>`;
+
+    const wrap = document.createElement("div");
+    wrap.style.display = "flex";
+    wrap.style.gap = "10px";
+    wrap.style.flexWrap = "wrap";
+    wrap.style.marginTop = "6px";
+
+    const radios = [0, 1, 2].map((i) => {
+      const label = document.createElement("label");
+      label.style.display = "flex";
+      label.style.alignItems = "center";
+      label.style.gap = "6px";
+
+      const rb = document.createElement("input");
+      rb.type = "radio";
+      rb.name = "drunk";
+      rb.value = String(i);
+
+      label.appendChild(rb);
+      label.appendChild(document.createTextNode(`Center ${i + 1}`));
+      wrap.appendChild(label);
+      return rb;
+    });
+
+    const submit = document.createElement("button");
+    submit.textContent = "Swap";
+    submit.onclick = () => {
+      const picked = radios.find(r => r.checked);
+      if (!picked) return alert("Pick 1 center card");
+      send("submit_action", {
+        actionId,
+        actionType: "drunk",
+        payload: { type: "drunk", centerIndex: Number(picked.value) },
+      });
+    };
+
+    actionContent.appendChild(wrap);
+    actionContent.appendChild(submit);
+    return;
+  }
+
+  if (prompt?.schema?.type === "insomniac") {
+    const btn = document.createElement("button");
+    btn.textContent = "Reveal My Final Role";
+    btn.onclick = () => {
+      send("submit_action", {
+        actionId,
+        actionType: "insomniac",
+        payload: { type: "insomniac" },
+      });
+    };
+    actionContent.appendChild(btn);
+    return;
+  }
+
+
 
 function clearActionUI() {
   state.pendingActionId = null;

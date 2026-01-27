@@ -61,7 +61,7 @@ class Room {
   constructor(code) {
     this.roomCode = code;
 
-    this.players = [];
+    this.players = []; 
     this.started = false;
 
     this.phase = "LOBBY";
@@ -131,7 +131,7 @@ class Room {
       return;
     }
 
-    this.safeError(ws, "Unsupported action (commit #11)");
+    this.safeError(ws, "Unsupported action (commit #12)");
   }
 
   handleDisconnect(ws) {
@@ -254,13 +254,23 @@ class Room {
       return;
     }
 
-    const confirmOnlyRoles = new Set([Roles.WEREWOLF, Roles.MINION, Roles.MASON, Roles.INSOMNIAC]);
-
     let schemaType = null;
-    if (confirmOnlyRoles.has(role)) schemaType = "confirm_only";
-    if (role === Roles.SEER) schemaType = "seer";
-    if (role === Roles.ROBBER) schemaType = "robber";
-    if (role === Roles.TROUBLEMAKER) schemaType = "troublemaker";
+
+    if (role === Roles.WEREWOLF) {
+      schemaType = (actors.length === 1) ? "werewolf_solo" : "confirm_only";
+    } else if (role === Roles.MINION || role === Roles.MASON) {
+      schemaType = "confirm_only";
+    } else if (role === Roles.SEER) {
+      schemaType = "seer";
+    } else if (role === Roles.ROBBER) {
+      schemaType = "robber";
+    } else if (role === Roles.TROUBLEMAKER) {
+      schemaType = "troublemaker";
+    } else if (role === Roles.DRUNK) {
+      schemaType = "drunk";
+    } else if (role === Roles.INSOMNIAC) {
+      schemaType = "insomniac";
+    }
 
     if (!schemaType) {
       this.advancePhase();
@@ -278,7 +288,7 @@ class Room {
     };
 
     for (const pid of actors) {
-      const prompt = this.buildPromptForRole(role, pid, actors.length);
+      const prompt = this.buildPromptForRole(role, pid, actors.length, schemaType);
       const p = this.players.find(x => x.id === pid);
       this.safeSend(p, { type: "prompt_action", actionId, phase: this.phase, prompt });
     }
@@ -288,8 +298,8 @@ class Room {
     }
   }
 
-  buildPromptForRole(role, actorId, actorCount) {
-    if (role === Roles.SEER) {
+  buildPromptForRole(role, actorId, actorCount, schemaType) {
+    if (schemaType === "seer") {
       const others = this.players.filter(p => p.id !== actorId).map(p => ({ id: p.id, name: p.name }));
       return {
         title: "SEER",
@@ -298,7 +308,7 @@ class Room {
       };
     }
 
-    if (role === Roles.ROBBER) {
+    if (schemaType === "robber") {
       const others = this.players.filter(p => p.id !== actorId).map(p => ({ id: p.id, name: p.name }));
       return {
         title: "ROBBER",
@@ -307,12 +317,36 @@ class Room {
       };
     }
 
-    if (role === Roles.TROUBLEMAKER) {
+    if (schemaType === "troublemaker") {
       const others = this.players.filter(p => p.id !== actorId).map(p => ({ id: p.id, name: p.name }));
       return {
         title: "TROUBLEMAKER",
         text: "Choose 2 other players to swap. You do NOT see their roles.",
         schema: { type: "troublemaker", players: others },
+      };
+    }
+
+    if (schemaType === "drunk") {
+      return {
+        title: "DRUNK",
+        text: "Pick 1 center card to swap with. You do NOT look at it.",
+        schema: { type: "drunk", centerCount: 3 },
+      };
+    }
+
+    if (schemaType === "insomniac") {
+      return {
+        title: "INSOMNIAC",
+        text: "You may look at your final role now.",
+        schema: { type: "insomniac", confirm: true },
+      };
+    }
+
+    if (schemaType === "werewolf_solo") {
+      return {
+        title: "WEREWOLF (Solo)",
+        text: "You are the only Werewolf. Choose 1 center card to look at.",
+        schema: { type: "werewolf_solo", centerCount: 3 },
       };
     }
 
@@ -326,11 +360,10 @@ class Room {
   promptTextForConfirmRole(role, actorCount) {
     if (role === Roles.WEREWOLF) {
       if (actorCount >= 2) return "Werewolves: open your eyes and see each other. Tap Confirm when done.";
-      return "You are the only Werewolf. (Center peek later.) Tap Confirm.";
+      return "You are the only Werewolf. Tap Confirm.";
     }
     if (role === Roles.MINION) return "Minion: see the Werewolves. Tap Confirm when done.";
     if (role === Roles.MASON) return "Mason: see the other Mason (if any). Tap Confirm.";
-    if (role === Roles.INSOMNIAC) return "Insomniac: you will check your final role later. Tap Confirm.";
     return "Tap Confirm.";
   }
 
@@ -347,6 +380,25 @@ class Room {
     if (this.pending.schemaType === "confirm_only") {
       const ok = (msg.actionType === "confirm_only") || (msg.payload?.type === "confirm_only");
       if (!ok) return this.safeError(ws, "Invalid action");
+      this.pending.completedActors.add(actorId);
+      ws.send(JSON.stringify({ type: "action_ack", actionId: this.pending.actionId }));
+      this.maybeFinishPending();
+      return;
+    }
+
+    if (this.pending.schemaType === "werewolf_solo") {
+      const ok = (msg.actionType === "werewolf_solo") || (msg.payload?.type === "werewolf_solo");
+      if (!ok) return this.safeError(ws, "Invalid action");
+
+      const idx = msg.payload?.centerIndex;
+      if (![0, 1, 2].includes(idx)) return this.safeError(ws, "centerIndex must be 0,1,2");
+
+      ws.send(JSON.stringify({
+        type: "action_result",
+        title: "Werewolf Peek",
+        text: `Center card ${idx + 1} is ${this.centerRoles[idx]}.`,
+      }));
+
       this.pending.completedActors.add(actorId);
       ws.send(JSON.stringify({ type: "action_ack", actionId: this.pending.actionId }));
       this.maybeFinishPending();
@@ -454,19 +506,68 @@ class Room {
         text: "Swap complete.",
       }));
 
-      this.safeSend(pA, {
+      this.safeSend(pA, { type: "private_state", phase: this.phase, playerId: pA.id, originalRole: pA.originalRole, currentRole: pA.currentRole });
+      this.safeSend(pB, { type: "private_state", phase: this.phase, playerId: pB.id, originalRole: pB.originalRole, currentRole: pB.currentRole });
+
+      this.pending.completedActors.add(actorId);
+      ws.send(JSON.stringify({ type: "action_ack", actionId: this.pending.actionId }));
+      this.maybeFinishPending();
+      return;
+    }
+
+    if (this.pending.schemaType === "drunk") {
+      const ok = (msg.actionType === "drunk") || (msg.payload?.type === "drunk");
+      if (!ok) return this.safeError(ws, "Invalid action");
+
+      const idx = msg.payload?.centerIndex;
+      if (![0, 1, 2].includes(idx)) return this.safeError(ws, "centerIndex must be 0,1,2");
+
+      const drunk = this.players.find(p => p.id === actorId);
+      if (!drunk) return this.safeError(ws, "Invalid actor");
+
+      const tmp = drunk.currentRole;
+      drunk.currentRole = this.centerRoles[idx];
+      this.centerRoles[idx] = tmp;
+
+      ws.send(JSON.stringify({
+        type: "action_result",
+        title: "Drunk",
+        text: `You swapped with a center card. (You do not get to see it.)`,
+      }));
+
+      this.safeSend(drunk, {
         type: "private_state",
         phase: this.phase,
-        playerId: pA.id,
-        originalRole: pA.originalRole,
-        currentRole: pA.currentRole,
+        playerId: drunk.id,
+        originalRole: drunk.originalRole,
+        currentRole: drunk.currentRole,
       });
-      this.safeSend(pB, {
+
+      this.pending.completedActors.add(actorId);
+      ws.send(JSON.stringify({ type: "action_ack", actionId: this.pending.actionId }));
+      this.maybeFinishPending();
+      return;
+    }
+
+    if (this.pending.schemaType === "insomniac") {
+      const ok = (msg.actionType === "insomniac") || (msg.payload?.type === "insomniac");
+      if (!ok) return this.safeError(ws, "Invalid action");
+
+      const insomniac = this.players.find(p => p.id === actorId);
+      if (!insomniac) return this.safeError(ws, "Invalid actor");
+
+      ws.send(JSON.stringify({
+        type: "action_result",
+        title: "Insomniac",
+        text: `Your final role is ${insomniac.currentRole}.`,
+      }));
+
+      this.safeSend(insomniac, {
         type: "private_state",
         phase: this.phase,
-        playerId: pB.id,
-        originalRole: pB.originalRole,
-        currentRole: pB.currentRole,
+        playerId: insomniac.id,
+        originalRole: insomniac.originalRole,
+        currentRole: insomniac.currentRole,
       });
 
       this.pending.completedActors.add(actorId);
